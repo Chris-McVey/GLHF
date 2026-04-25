@@ -12,7 +12,10 @@ import SwiftData
 struct GLHFApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            Game.self,
+            Review.self,
+            GameCollection.self,
+            CollectionEntry.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
