@@ -22,3 +22,6 @@ Pods/
 .cursor/
 .vscode/
 buildServer.json
+
+# MCP Files
+.playwright-mcp/
