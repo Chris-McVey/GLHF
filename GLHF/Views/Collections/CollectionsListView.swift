@@ -38,7 +38,7 @@ struct CollectionsListView: View {
             ContentUnavailableView(
                 "No Collections Yet",
                 systemImage: "square.stack.3d.up",
-                description: Text("Tap + to create a smart or custom collection")
+                description: Text("Tap + to create a complete library, smart filter, or custom collection")
             )
         } else {
             List {
@@ -65,7 +65,9 @@ struct CollectionsListView: View {
                 Text(collection.name)
                     .font(.headline)
 
-                if collection.hasFilters {
+                if collection.isCanonicalBased {
+                    canonicalCollectionSubtitle(collection)
+                } else if collection.hasFilters {
                     smartCollectionSubtitle(collection)
                 } else {
                     Text("\(collection.gameCount) games")
@@ -75,6 +77,31 @@ struct CollectionsListView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func canonicalCollectionSubtitle(_ collection: GameCollection) -> some View {
+        Text("\(collection.platformName ?? "NES") · Complete library")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+
+        if collection.totalCatalogSize > 0 {
+            VStack(alignment: .leading, spacing: 2) {
+                ProgressView(value: collection.completionPercent / 100)
+                    .tint(.accentColor)
+
+                HStack {
+                    Text("\(collection.ownedCount) of \(collection.totalCatalogSize) owned")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(Int(collection.completionPercent))%")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tint)
+                }
+            }
+        }
     }
 
     @ViewBuilder

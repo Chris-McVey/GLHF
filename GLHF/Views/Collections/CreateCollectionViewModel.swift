@@ -8,9 +8,19 @@
 import Foundation
 import SwiftData
 
+enum CollectionCreationMode: String, CaseIterable, Identifiable {
+    case canonical = "Complete library"
+    case smart = "Smart filter"
+    case manual = "Empty collection"
+
+    var id: String { rawValue }
+}
+
 @Observable
 @MainActor
 final class CreateCollectionViewModel {
+    var creationMode: CollectionCreationMode = .canonical
+    var selectedPresetID: String?
     var name = ""
     var selectedIcon = "folder"
 
@@ -28,11 +38,20 @@ final class CreateCollectionViewModel {
     var isLoadingPreview = false
     var previewError: String?
 
+    let canonicalPresets = CanonicalSetService.availablePresets()
+
     private let service = RAWGService()
     private var previewTask: Task<Void, Never>?
 
+    var selectedPreset: CanonicalSetPreset? {
+        guard let selectedPresetID else { return canonicalPresets.first }
+        return canonicalPresets.first { $0.id == selectedPresetID }
+            ?? canonicalPresets.first
+    }
+
     var hasFilters: Bool {
-        platformID != nil
+        guard creationMode == .smart else { return false }
+        return platformID != nil
             || genreID != nil
             || developerID != nil
             || !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -41,7 +60,59 @@ final class CreateCollectionViewModel {
     }
 
     var isValid: Bool {
-        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch creationMode {
+        case .canonical:
+            return selectedPreset != nil && !trimmedName.isEmpty
+        case .smart, .manual:
+            return !trimmedName.isEmpty
+        }
+    }
+
+    init() {
+        if let first = canonicalPresets.first {
+            selectedPresetID = first.id
+        }
+    }
+
+    func selectPreset(_ preset: CanonicalSetPreset) {
+        selectedPresetID = preset.id
+        applyPresetMetadata(preset)
+    }
+
+    private func applyPresetMetadata(_ preset: CanonicalSetPreset) {
+        platformID = CanonicalGameID.nesRAWGPlatformID
+        platformName = preset.platformName
+    }
+
+    func onCreationModeChanged() {
+        previewTask?.cancel()
+        previewCount = nil
+        previewError = nil
+        isLoadingPreview = false
+
+        switch creationMode {
+        case .canonical:
+            if selectedPresetID == nil, let first = canonicalPresets.first {
+                selectedPresetID = first.id
+            }
+            if let preset = selectedPreset {
+                applyPresetMetadata(preset)
+            }
+            selectedIcon = "gamecontroller"
+        case .smart:
+            schedulePreviewRefresh()
+        case .manual:
+            platformID = nil
+            platformName = nil
+            genreID = nil
+            genreName = nil
+            developerID = nil
+            developerName = nil
+            searchQuery = ""
+            dateFromYear = nil
+            dateToYear = nil
+        }
     }
 
     func clearPlatform() {
@@ -83,7 +154,7 @@ final class CreateCollectionViewModel {
     func schedulePreviewRefresh() {
         previewTask?.cancel()
 
-        guard hasFilters else {
+        guard creationMode == .smart, hasFilters else {
             previewCount = nil
             previewError = nil
             isLoadingPreview = false
@@ -124,10 +195,33 @@ final class CreateCollectionViewModel {
     }
 
     func save(modelContext: ModelContext) {
-        let collection = GameCollection(
-            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-            icon: selectedIcon
-        )
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        switch creationMode {
+        case .canonical:
+            saveCanonicalCollection(name: trimmedName, modelContext: modelContext)
+        case .smart:
+            saveSmartCollection(name: trimmedName, modelContext: modelContext)
+        case .manual:
+            saveManualCollection(name: trimmedName, modelContext: modelContext)
+        }
+    }
+
+    private func saveCanonicalCollection(name: String, modelContext: ModelContext) {
+        guard let preset = selectedPreset else { return }
+
+        let collection = GameCollection(name: name, icon: selectedIcon)
+        collection.canonicalSetID = preset.id
+        collection.canonicalSetVersion = preset.version
+        collection.totalCatalogSize = preset.gameCount
+        collection.platformID = CanonicalGameID.nesRAWGPlatformID
+        collection.platformName = preset.platformName
+        collection.lastSyncedAt = Date()
+        modelContext.insert(collection)
+    }
+
+    private func saveSmartCollection(name: String, modelContext: ModelContext) {
+        let collection = GameCollection(name: name, icon: selectedIcon)
         collection.platformID = platformID
         collection.platformName = platformName
         collection.genreID = genreID
@@ -145,6 +239,11 @@ final class CreateCollectionViewModel {
             collection.lastSyncedAt = Date()
         }
 
+        modelContext.insert(collection)
+    }
+
+    private func saveManualCollection(name: String, modelContext: ModelContext) {
+        let collection = GameCollection(name: name, icon: selectedIcon)
         modelContext.insert(collection)
     }
 }

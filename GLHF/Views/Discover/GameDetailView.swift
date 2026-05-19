@@ -11,7 +11,6 @@ import SwiftData
 struct GameDetailView: View {
     let game: RAWGGame
     let modelContext: ModelContext
-    @State private var showingReviewSheet = false
     @State private var showingCollectionSheet = false
 
     var body: some View {
@@ -25,32 +24,19 @@ struct GameDetailView: View {
         }
         .navigationTitle(game.name)
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showingReviewSheet) {
-            WriteReviewView(game: game)
-        }
         .sheet(isPresented: $showingCollectionSheet) {
             AddToCollectionSheet(game: game)
         }
     }
 
     private var actionButtons: some View {
-        HStack(spacing: 12) {
-            Button {
-                showingReviewSheet = true
-            } label: {
-                Label("Review", systemImage: "square.and.pencil")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-
-            Button {
-                showingCollectionSheet = true
-            } label: {
-                Label("Collect", systemImage: "plus.square.on.square")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
+        Button {
+            showingCollectionSheet = true
+        } label: {
+            Label("Add to Collection", systemImage: "plus.square.on.square")
+                .frame(maxWidth: .infinity)
         }
+        .buttonStyle(.borderedProminent)
         .padding(.horizontal)
     }
 

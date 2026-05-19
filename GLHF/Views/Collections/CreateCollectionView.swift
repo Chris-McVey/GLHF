@@ -22,10 +22,20 @@ struct CreateCollectionView: View {
     var body: some View {
         NavigationStack {
             Form {
-                nameAndIconSection(vm: viewModel)
-                filtersSection(vm: viewModel)
-                yearRangeSection(vm: viewModel)
-                previewSection
+                nameSection(vm: viewModel)
+                creationModeSection
+
+                if viewModel.creationMode == .canonical {
+                    canonicalPresetSection
+                }
+
+                iconSection(vm: viewModel)
+
+                if viewModel.creationMode == .smart {
+                    filtersSection(vm: viewModel)
+                    yearRangeSection(vm: viewModel)
+                    previewSection
+                }
             }
             .navigationTitle("New Collection")
             .navigationBarTitleDisplayMode(.inline)
@@ -45,31 +55,101 @@ struct CreateCollectionView: View {
         }
     }
 
-    private func nameAndIconSection(@Bindable vm: CreateCollectionViewModel) -> some View {
-        Group {
-            Section("Collection Name") {
-                TextField("e.g. NES Library", text: $vm.name)
-            }
+    private func nameSection(@Bindable vm: CreateCollectionViewModel) -> some View {
+        Section("Collection Name") {
+            TextField("e.g. My NES Library", text: $vm.name)
+        }
+    }
 
-            Section("Icon") {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 16) {
-                    ForEach(iconOptions, id: \.self) { icon in
-                        Image(systemName: icon)
-                            .font(.title2)
-                            .frame(width: 44, height: 44)
-                            .background(
-                                viewModel.selectedIcon == icon
-                                    ? Color.accentColor.opacity(0.2)
-                                    : Color.clear
-                            )
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .onTapGesture {
-                                viewModel.selectedIcon = icon
+    private var creationModeSection: some View {
+        Section {
+            Picker("Start from", selection: $viewModel.creationMode) {
+                ForEach(CollectionCreationMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.inline)
+            .onChange(of: viewModel.creationMode) {
+                viewModel.onCreationModeChanged()
+            }
+        } footer: {
+            switch viewModel.creationMode {
+            case .canonical:
+                Text("Pick a bundled checklist, then name your collection.")
+            case .smart:
+                Text("Build a living filter from RAWG. Good for genres or publishers, not a fixed canon.")
+            case .manual:
+                Text("Add games yourself from Discover.")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var canonicalPresetSection: some View {
+        Section {
+            if viewModel.canonicalPresets.isEmpty {
+                Label("Canonical list file missing from app bundle.", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(viewModel.canonicalPresets) { preset in
+                    Button {
+                        viewModel.selectPreset(preset)
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(preset.displayName)
+                                    .font(.headline)
+                                    .foregroundStyle(.primary)
+                                Text("\(preset.gameCount) games · \(preset.platformName)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
+                            Spacer()
+                            if viewModel.selectedPreset?.id == preset.id {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.tint)
+                            }
+                        }
                     }
                 }
-                .padding(.vertical, 8)
+
+                if let preset = viewModel.selectedPreset {
+                    Text(preset.attribution)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    if let urlString = preset.wikipediaListUrl, let url = URL(string: urlString) {
+                        Link("View Wikipedia source list", destination: url)
+                            .font(.caption)
+                    }
+                }
             }
+        } header: {
+            Text("Library checklist")
+        } footer: {
+            Text("Wikipedia-based lists (licensed and unlicensed Western retail).")
+        }
+    }
+
+    private func iconSection(@Bindable vm: CreateCollectionViewModel) -> some View {
+        Section("Icon") {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 16) {
+                ForEach(iconOptions, id: \.self) { icon in
+                    Image(systemName: icon)
+                        .font(.title2)
+                        .frame(width: 44, height: 44)
+                        .background(
+                            viewModel.selectedIcon == icon
+                                ? Color.accentColor.opacity(0.2)
+                                : Color.clear
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .onTapGesture {
+                            viewModel.selectedIcon = icon
+                        }
+                }
+            }
+            .padding(.vertical, 8)
         }
     }
 
@@ -117,8 +197,6 @@ struct CreateCollectionView: View {
             }
         } header: {
             Text("Filters")
-        } footer: {
-            Text("Filters are optional. Leave them blank for a fully manual collection.")
         }
     }
 

@@ -27,6 +27,35 @@ ConfidenceTier = Literal["authoritative", "likely", "review"]
 XREF_FUZZY_THRESHOLD = 88
 
 
+def _fuzzy_xref_allowed(candidate_key: str, matched_key: str) -> bool:
+    """Reject fuzzy matches between a title and a strict prefix extension.
+
+    Blocks `Tetris 2 + Bombliss` ↔ `Tetris 2` and `Super Mario Bros.` ↔
+    `Super Mario Bros. 2` without affecting exact-key hits.
+    """
+    if candidate_key == matched_key:
+        return True
+    if candidate_key.startswith(matched_key + " "):
+        return False
+    if matched_key.startswith(candidate_key + " "):
+        return False
+    return True
+
+
+def _wikidata_regions_jp_only(regions: list[str]) -> bool:
+    if not regions:
+        return False
+    for region in regions:
+        rl = region.lower().strip()
+        if rl in ("japan", "jp"):
+            continue
+        if any(token in rl for token in WESTERN_REGION_TOKENS):
+            return False
+        # Any other non-empty region (e.g. "Soviet Union") → not JP-only.
+        return False
+    return True
+
+
 def is_western(
     candidate: dict[str, Any],
     wp: dict[str, Any] | None,
@@ -45,14 +74,22 @@ def is_western(
     if platform.region.lower() not in {"western", "us", "na"}:
         return True
 
+    wd_regions = candidate.get("regions") or []
+    jp_only = _wikidata_regions_jp_only(wd_regions)
+
     if wp and wp.get("has_western_release"):
         return True
     if ni and ni.get("has_western_release"):
         return True
 
-    wd_regions = candidate.get("regions") or []
+    if jp_only:
+        return False
+
     if wd_regions:
-        if any(r.lower() in WESTERN_REGION_TOKENS for r in wd_regions):
+        if any(
+            any(token in r.lower() for token in WESTERN_REGION_TOKENS)
+            for r in wd_regions
+        ):
             return True
         # Wikidata says JP-only; Wikipedia/No-Intro didn't override.
         # If Wikipedia explicitly knows about this game and confirms JP-only,
@@ -116,6 +153,8 @@ def _fuzzy_lookup(
     if match is None:
         return None, None
     matched_key = match[0]
+    if not _fuzzy_xref_allowed(key, matched_key):
+        return None, None
     return index.get(matched_key), matched_key
 
 
@@ -187,6 +226,7 @@ def build(
     enriched: list[dict[str, Any]],
     *,
     include_review_tier: bool = False,
+    primary_source: str = "wikipedia",
 ) -> dict[str, Any]:
     """Assemble the output bundle.
 
@@ -194,11 +234,12 @@ def build(
     `wikidata`, `rawg_match`, `wikipedia`, `nointro`, `validation`,
     `release_year`, `release_year_source`.
 
-    By default, only `authoritative` and `likely` games ship in the bundle;
-    `review` tier goes to the editorial report only. Pass
-    `include_review_tier=True` to surface them in the JSON.
+    When `primary_source` is `wikipedia`, every enriched row ships (membership
+    is already Wikipedia-driven). Otherwise only `authoritative` and `likely`
+    tiers ship unless `include_review_tier=True`.
     """
     version = time.strftime(BUNDLE_VERSION_FORMAT)
+    ship_all = primary_source == "wikipedia"
 
     games_payload: list[dict[str, Any]] = []
     counts = {"authoritative": 0, "likely": 0, "review": 0}
@@ -207,11 +248,9 @@ def build(
         validation: Validation = entry["validation"]
         counts[validation.confidence_tier] += 1
         override_reason = entry.get("override_reason")
-        # Override-included games bypass the default tier filter, so an
-        # editorial decision to ship a 1-source-only game survives without
-        # needing --include-review-tier on every run.
         if (
-            not include_review_tier
+            not ship_all
+            and not include_review_tier
             and validation.confidence_tier == "review"
             and not override_reason
         ):
@@ -253,6 +292,16 @@ def build(
     for g in games_payload:
         license_counts[g["licenseStatus"]] += 1
 
+    source_list = (
+        ["wikipedia", "wikidata", "no-intro", "rawg"]
+        if primary_source == "wikipedia"
+        else ["wikidata", "wikipedia", "no-intro", "rawg"]
+    )
+    policy = (
+        "western-licensed-and-unlicensed-retail"
+        if primary_source == "wikipedia"
+        else None
+    )
     return {
         "id": f"{platform.slug}-{version}",
         "displayName": f"Complete {platform.display_name} Library",
@@ -260,8 +309,11 @@ def build(
         "platformSlug": platform.slug,
         "region": platform.region,
         "version": version,
-        "schemaVersion": 3,
-        "sources": ["wikidata", "wikipedia", "no-intro", "rawg"],
+        "schemaVersion": 4,
+        "primarySource": primary_source,
+        "policy": policy,
+        "wikipediaListUrl": platform.wikipedia_list_url,
+        "sources": source_list,
         "sourceCounts": counts,
         "licenseCounts": license_counts,
         "overrideCount": override_count,

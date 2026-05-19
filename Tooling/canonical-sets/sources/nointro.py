@@ -28,18 +28,49 @@ from matching import normalize
 _TAG_GROUP = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]\s*")
 _REGION_GROUP = re.compile(r"\(([^)]*)\)")
 
-_WESTERN_REGION_TOKENS = ("usa", "europe", "world", "australia")
+# Region tags that count toward Western *retail cartridge* canon. "World" alone
+# is excluded when the DAT name marks a compilation / VC / re-release bundle.
+_WESTERN_RETAIL_REGION_TOKENS = ("usa", "europe", "australia")
+
+# Parenthetical / name markers for non-retail ROM rows (still indexed for gaps).
+_NON_RETAIL_MARKERS = (
+    "virtual console",
+    "collection",
+    "museum",
+    "archives",
+    "switch online",
+    "nintendo switch",
+    "classics mini",
+    "game & watch",
+    "namcot collection",
+    "namco museum",
+)
 
 _EXCLUDE_TAGS = frozenset({
     "proto", "prototype", "beta", "sample", "demo",
     "test program", "debug", "kiosk",
 })
 
-_UNLICENSED_TAGS = frozenset({
-    "unl", "unlicensed", "aftermarket", "homebrew",
-})
+_UNLICENSED_TAGS = frozenset({"unl", "unlicensed"})
+
+_HOMEBREW_TAGS = frozenset({"aftermarket", "homebrew"})
 
 _CLRMAME_NAME_RE = re.compile(r'^\s+name "([^"]+)"\s*$', re.MULTILINE)
+
+
+def _raw_is_western_retail(raw_name: str, region_tag: str | None) -> bool:
+    """True when this DAT row is a Western retail-era cartridge, not VC/compilation."""
+    if not region_tag:
+        return False
+    lower_raw = raw_name.lower()
+    if any(marker in lower_raw for marker in _NON_RETAIL_MARKERS):
+        return False
+    tag = region_tag.lower()
+    if any(token in tag for token in _WESTERN_RETAIL_REGION_TOKENS):
+        return True
+    if "world" in tag:
+        return True
+    return False
 
 
 def load(platform: PlatformConfig) -> dict[str, dict[str, Any]]:
@@ -97,6 +128,10 @@ def _build_western_index(raw_names: list[str]) -> dict[str, dict[str, Any]]:
             t in _UNLICENSED_TAGS or any(x in t for x in _UNLICENSED_TAGS)
             for t in tags
         )
+        is_homebrew = any(
+            t in _HOMEBREW_TAGS or any(x in t for x in _HOMEBREW_TAGS)
+            for t in tags
+        )
 
         region_tag = next(
             (t for t in tags if any(r in t for r in (
@@ -120,21 +155,25 @@ def _build_western_index(raw_names: list[str]) -> dict[str, dict[str, Any]]:
                 "regions": set(),
                 "raw_names": [],
                 "is_unlicensed": True,
+                "is_homebrew": False,
+                "has_western_retail_release": False,
             }
         games[key]["regions"].add(region_tag or "unknown")
         games[key]["raw_names"].append(raw_name)
         if not is_unlicensed:
             games[key]["is_unlicensed"] = False
+        if is_homebrew:
+            games[key]["is_homebrew"] = True
+        if _raw_is_western_retail(raw_name, region_tag):
+            games[key]["has_western_retail_release"] = True
 
     western_only: dict[str, dict[str, Any]] = {}
     for key, record in games.items():
         regions = record["regions"]
         record["regions"] = sorted(regions)
-        record["has_western_release"] = any(
-            any(w in r for w in _WESTERN_REGION_TOKENS)
-            for r in regions
-        )
+        record["has_western_release"] = record.get("has_western_retail_release", False)
         record["is_unlicensed"] = record.get("is_unlicensed", False)
+        record["is_homebrew"] = record.get("is_homebrew", False)
         if record["has_western_release"]:
             western_only[key] = record
 

@@ -7,6 +7,10 @@ Western markets despite empty `regions` fields, prototypes that survived
 SPARQL on a stray P400 tag, etc.
 
 The overrides file is the single source of truth for those decisions.
+
+With `--source wikipedia`, membership comes from the list article; `[exclude]`
+drops rows, `[name]`/`[rawg]`/`[year]` patch enrichment. Keys are Wikidata QIDs
+when matched, else `wp:<normalized-title>`.
 Edits land in git, survive pipeline re-runs, and surface in the review
 report so the next reviewer can see why a game was force-included or
 relabeled.

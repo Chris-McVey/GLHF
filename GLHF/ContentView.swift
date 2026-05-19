@@ -15,10 +15,6 @@ struct ContentView: View {
                 DiscoverView()
             }
 
-            Tab("Reviews", systemImage: "star.bubble") {
-                ReviewsListView()
-            }
-
             Tab("Collections", systemImage: "square.stack.3d.up") {
                 CollectionsListView()
             }

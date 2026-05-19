@@ -34,11 +34,18 @@ For a target platform (e.g. NES):
 4. **RAWG** — fuzzy-matches each surviving candidate to a stable RAWG ID so
    the iOS app's existing detail / cover-art code paths keep working.
 
-**Region inclusion is a multi-source vote**, not a Wikidata-only filter:
+**Default membership (`--source wikipedia`, see `CANONICAL_POLICY.md`):** every
+Wikipedia licensed or unlicensed row with a NA or PAL release year, minus
+homebrew. Wikidata and No-Intro enrich only; all rows ship in the bundle.
+
+**Legacy (`--source wikidata`) — region inclusion is a multi-source vote**, not a Wikidata-only filter:
 a candidate ships in the bundle if Wikipedia confirms a NA/PAL release, OR
-No-Intro tags it with a Western region, OR Wikidata's per-release region
-qualifiers include a Western region. Only when none of those signals fire
-is the game classified as JP-only and dropped.
+No-Intro tags it with a **retail** Western cartridge (`USA` / `Europe` /
+`Australia`, or standalone `(World)` — not Virtual Console / Museum /
+Collection bundles), OR Wikidata's per-release region qualifiers include a
+Western region. Wikidata **Japan-only** rows drop unless Wikipedia or retail
+No-Intro overrides. Fuzzy cross-reference rejects strict prefix extensions
+(`Tetris 2 + Bombliss` must not match `Tetris 2`).
 
 **Release year follows a Western-first precedence**: Wikipedia NA → Wikipedia
 EU → RAWG → Wikidata-platform-qualified → Wikidata earliest. Wikidata's

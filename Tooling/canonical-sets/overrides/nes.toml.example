@@ -1,44 +1,12 @@
-# Worked example — copy to `nes.toml` and adapt as you walk the review report.
+# Example overrides (Wikipedia-primary). Copy patterns into `nes.toml`.
 #
-# This file demonstrates each override mechanism with real cases pulled from
-# `output/review/nes-review.md`. Every entry below was verified to produce
-# correct bundle output during the overrides system smoke test.
-
-# 4 review-tier entries promoted into the bundle. Wikidata tracks each
-# Dragon Quest under its JP name; the NES NA market knew them as Dragon
-# Warrior. Combining [include] + [name] + [year] gives a fully-Western
-# bundle entry from a JP-leaning Wikidata candidate.
-[include]
-Q2313869 = "Wikidata 'Dragon Quest'; NES NA was 'Dragon Warrior' 1989 — Wikipedia tracks under that name"
-Q2312762 = "Wikidata 'Dragon Quest II'; NES NA was 'Dragon Warrior II' 1990"
-Q81288   = "Wikidata 'Dragon Quest III'; NES NA was 'Dragon Warrior III' 1992"
-Q2310470 = "Wikidata 'Dragon Quest IV'; NES NA was 'Dragon Warrior IV' 1992"
-
-[name]
-Q2705496 = "Mike Tyson's Punch-Out!!"
-Q2313869 = "Dragon Warrior"
-Q2312762 = "Dragon Warrior II"
-Q81288   = "Dragon Warrior III"
-Q2310470 = "Dragon Warrior IV"
+# Membership = Wikipedia Western licensed + unlicensed retail (see CANONICAL_POLICY.md).
+# Use this file only for enrichment fixes after `uv run curate.py`.
 
 [year]
-Q2313869 = 1989
-Q2312762 = 1990
-Q81288   = 1992
-Q2310470 = 1992
+# Q12345 = 1990   # when RAWG returns the wrong regional year
 
-# Force a specific RAWG ID for a game whose auto-match was low-confidence.
-# (Hypothetical example; uncomment + edit if you spot a similar case.)
-# [rawg]
-# Q2047507 = 12345  # Metal Fighter — pin to actual RAWG ID
+[rawg]
+# Q12345 = 54074  # pin cover art when fuzzy-match picks the wrong game
 
-# Wikipedia-only entries: games confirmed in Wikipedia's NA/PAL columns but
-# absent from Wikidata. Supplements get a synthetic record in the bundle
-# and go through RAWG fuzzy-match by name (or use the explicit rawg_id).
-# [[supplement]]
-# slug       = "donkey-kong-classics"
-# name       = "Donkey Kong Classics"
-# year       = 1988
-# rawg_id    = 53787
-# publishers = ["Nintendo"]
-# note       = "1988 NA multicart compiling DK and DK Jr; no Wikidata entity"
+# [[supplement]]  # rare: only if Wikipedia omits a row you still want in the set

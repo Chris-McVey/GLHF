@@ -9,17 +9,20 @@
 # ]
 # ///
 """
-Canonical-Set Curation Pipeline (multi-source v2).
+Canonical-Set Curation Pipeline.
 
-For a target platform:
+**Default (`--source wikipedia`):** membership from Wikipedia's platform list
+article (Western licensed + unlicensed retail; homebrew excluded). Wikidata
+and No-Intro enrich only. See `CANONICAL_POLICY.md`.
 
-  1. Pull a candidate list from Wikidata (SPARQL, region-filtered).
-  2. Cross-reference against Wikipedia's "List of <platform> games" article.
-  3. Cross-reference against the No-Intro DAT for the platform.
-  4. Resolve a stable RAWG ID for each surviving candidate.
-  5. Tier each entry by source agreement (authoritative/likely/review).
-  6. Write a JSON bundle (default: tier in {authoritative, likely}) and a
-     markdown editorial review report.
+**Legacy (`--source wikidata`):** Wikidata SPARQL candidates + Western vote.
+
+For either mode:
+
+  1. Build candidate list (Wikipedia rows or Wikidata SPARQL).
+  2. Cross-reference No-Intro (validation).
+  3. Resolve RAWG IDs.
+  4. Write JSON bundle + editorial review report.
 
 Outputs:
   output/<slug>.json              - Bundle file (the deliverable)
@@ -44,8 +47,46 @@ from typing import Any
 import overrides as overrides_mod
 from bundle import Validation, build, cross_reference, is_western, resolve_release_year
 from config import OUTPUT_DIR, REVIEW_DIR, SCRIPT_DIR, PLATFORMS
+from homebrew import _HOMEBREW_YEAR_CUTOFF, is_homebrew_candidate
 from review import write_report
+from matching import normalize
 from sources import nointro, rawg, wikidata, wikipedia
+from sources import wikipedia_primary
+
+
+def _preliminary_release_year(
+    wd: dict[str, Any],
+    wp: dict[str, Any] | None,
+) -> int | None:
+    if wp:
+        if y := wp.get("na_year"):
+            return y
+        if y := wp.get("eu_year"):
+            return y
+    if y := wd.get("release_year_wikidata_platform"):
+        return y
+    if y := wd.get("release_year_wikidata_earliest"):
+        return y
+    return None
+
+
+def _preliminary_license_status(
+    wp: dict[str, Any] | None,
+    ni: dict[str, Any] | None,
+    qid: str,
+    overrides: overrides_mod.Overrides,
+) -> str:
+    if qid in overrides.license:
+        return "unlicensed" if not overrides.license[qid] else "licensed"
+    if wp is not None and "is_licensed" in wp:
+        return "licensed" if wp["is_licensed"] else "unlicensed"
+    if ni is not None:
+        if ni.get("is_homebrew"):
+            return "unlicensed"
+        if ni.get("is_unlicensed"):
+            return "unlicensed"
+        return "licensed"
+    return "unknown"
 
 # The Swift app stores the RAWG key in GLHF/Services/Secrets.swift (gitignored).
 # Reuse it so the curator doesn't need a separate env var on this machine.
@@ -76,10 +117,16 @@ def main() -> int:
         help="Which platform to curate.",
     )
     parser.add_argument(
+        "--source",
+        choices=("wikipedia", "wikidata"),
+        default="wikipedia",
+        help="Membership authority (default: wikipedia per CANONICAL_POLICY.md).",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
-        help="Optional cap on Wikidata entries (smoke testing).",
+        help="Optional cap on candidates (smoke testing).",
     )
     parser.add_argument(
         "--include-review-tier",
@@ -116,26 +163,37 @@ def main() -> int:
     if not overrides.is_empty:
         print(f"[overrides] Loaded {overrides.summary()}")
 
-    bindings = wikidata.fetch(platform)
-    candidates = wikidata.coalesce(bindings, platform)
+    wikipedia_index = wikipedia.fetch(platform)
+    nointro_index = nointro.load(platform)
+
+    if args.source == "wikipedia":
+        wikidata_for_enrich = wikidata.coalesce(wikidata.fetch(platform), platform)
+        candidates = wikipedia_primary.build_candidates(
+            platform, wikipedia_index, wikidata_for_enrich,
+        )
+    else:
+        bindings = wikidata.fetch(platform)
+        candidates = wikidata.coalesce(bindings, platform)
+        if args.source == "wikidata":
+            print("[wikidata] Legacy mode: Wikidata-primary Western vote.")
 
     if args.limit:
         candidates = candidates[: args.limit]
-        print(f"[wikidata] Limited to first {len(candidates)} entries for smoke test.")
+        print(f"[{args.source}] Limited to first {len(candidates)} entries for smoke test.")
 
     overrides_mod.report_unused(
         overrides, candidate_qids={c["wikidata_qid"] for c in candidates},
     )
 
-    wikipedia_index = wikipedia.fetch(platform)
-    nointro_index = nointro.load(platform)
+    use_wikipedia_primary = args.source == "wikipedia"
 
-    # Phase 1: cross-reference + Western-vote (cheap, no API calls).
+    # Phase 1: cross-reference (+ Western-vote for Wikidata-primary only).
     # We compute the Western decision before RAWG so we don't burn quota on
     # Famicom-only games that won't make the bundle. Editorial [include]
     # overrides force a candidate past the vote; [exclude] forces a drop.
     voted: list[dict[str, Any]] = []
     region_drops: list[dict[str, Any]] = []
+    homebrew_drops: list[dict[str, Any]] = []
     matched_wp_keys: set[str] = set()
     matched_ni_keys: set[str] = set()
     for wd in candidates:
@@ -160,18 +218,43 @@ def main() -> int:
             continue
         if qid in overrides.include:
             override_reason = overrides.include[qid]
-        elif not is_western(wd, wp, ni, platform):
-            region_drops.append(wd)
-            continue
+        elif not use_wikipedia_primary:
+            if not is_western(wd, wp, ni, platform):
+                region_drops.append(wd)
+                continue
+            is_hb, hb_reason = is_homebrew_candidate(
+                nointro_record=ni,
+                wikipedia_record=wp,
+                release_year=_preliminary_release_year(wd, wp),
+                license_status=_preliminary_license_status(wp, ni, qid, overrides),
+            )
+            if is_hb:
+                homebrew_drops.append({**wd, "homebrew_reason": hb_reason})
+                continue
+        if use_wikipedia_primary:
+            validation = Validation(
+                in_wikidata=not str(qid).startswith("wp:"),
+                in_wikipedia=True,
+                in_no_intro=validation.in_no_intro,
+            )
         voted.append({
             "wikidata": wd, "wikipedia": wp, "nointro": ni,
             "validation": validation,
             "override_reason": override_reason,
         })
-    print(
-        f"[region] Western vote: {len(voted)} kept, {len(region_drops)} dropped as "
-        f"non-Western."
-    )
+    if use_wikipedia_primary:
+        print(f"[wikipedia-primary] {len(voted)} rows queued for RAWG enrichment.")
+    else:
+        print(
+            f"[region] Western vote: {len(voted)} kept, {len(region_drops)} dropped as "
+            f"non-Western."
+        )
+        if homebrew_drops:
+            print(
+                f"[homebrew] Dropped {len(homebrew_drops)} aftermarket/homebrew titles "
+                f"(No-Intro tag, Wikipedia section, or post-{_HOMEBREW_YEAR_CUTOFF} "
+                f"unlicensed)."
+            )
 
     # Phase 2: RAWG resolution + year precedence on the kept set.
     if args.skip_rawg:
@@ -243,7 +326,10 @@ def main() -> int:
 
     # Phase 3: synthesize Wikipedia-supplement entries that have no Wikidata
     # entity but are confirmed Western releases per editorial decision.
+    existing_keys = {normalize(c["name"]) for c in candidates}
     for supp in overrides.supplements:
+        if normalize(supp.name) in existing_keys:
+            continue
         synth_wd = {
             "wikidata_qid": f"override-{supp.slug}",
             "wikidata_uri": None,
@@ -304,13 +390,22 @@ def main() -> int:
 
     if overrides.supplements:
         print(f"[overrides] Synthesized {len(overrides.supplements)} Wikipedia-supplement entries.")
-        from matching import normalize as _norm
         for supp in overrides.supplements:
-            wp_key = _norm(supp.name)
+            wp_key = normalize(supp.name)
             if wp_key in wikipedia_index:
                 matched_wp_keys.add(wp_key)
 
-    bundle = build(platform, enriched, include_review_tier=args.include_review_tier)
+    if use_wikipedia_primary:
+        matched_wp_keys.update(
+            normalize(c["name"]) for c in candidates if normalize(c["name"]) in wikipedia_index
+        )
+
+    bundle = build(
+        platform,
+        enriched,
+        include_review_tier=args.include_review_tier,
+        primary_source=args.source,
+    )
     bundle_path = OUTPUT_DIR / f"{platform.slug}.json"
     bundle_path.write_text(json.dumps(bundle, indent=2, ensure_ascii=False) + "\n")
     print(f"[output] Bundle written: {bundle_path.relative_to(OUTPUT_DIR.parent)}")
@@ -326,14 +421,23 @@ def main() -> int:
     counts = bundle["sourceCounts"]
     total = bundle["gameCount"]
     matched_count = bundle["matchedGameCount"]
-    print(
-        f"[done] {total} games in bundle "
-        f"({counts['authoritative']} authoritative, {counts['likely']} likely, "
-        f"{counts['review']} review-tier held back); "
-        f"{matched_count} ({matched_count/total:.0%}) "
-        f"matched to RAWG IDs."
-        if total else "[done] 0 games in bundle."
-    )
+    if use_wikipedia_primary:
+        print(
+            f"[done] {total} games in bundle (Wikipedia-primary; "
+            f"{counts['authoritative']} authoritative / {counts['likely']} likely / "
+            f"{counts['review']} review enrichment tiers); "
+            f"{matched_count} ({matched_count/total:.0%}) matched to RAWG IDs."
+            if total else "[done] 0 games in bundle."
+        )
+    else:
+        print(
+            f"[done] {total} games in bundle "
+            f"({counts['authoritative']} authoritative, {counts['likely']} likely, "
+            f"{counts['review']} review-tier held back); "
+            f"{matched_count} ({matched_count/total:.0%}) "
+            f"matched to RAWG IDs."
+            if total else "[done] 0 games in bundle."
+        )
     return 0
 
 

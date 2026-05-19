@@ -30,8 +30,16 @@ final class GameCollection {
     var excludedAPIIds: [Int] = []
     var includedAPIIds: [Int] = []
 
+    /// Bundled canonical set identifier (e.g. `nes-20260518`).
+    var canonicalSetID: String?
+    var canonicalSetVersion: String?
+
     @Relationship(deleteRule: .cascade, inverse: \CollectionEntry.collection)
     var entries: [CollectionEntry] = []
+
+    var isCanonicalBased: Bool {
+        canonicalSetID != nil
+    }
 
     var ownedEntries: [CollectionEntry] {
         entries.filter { entry in entry.owned }
@@ -57,7 +65,8 @@ final class GameCollection {
     }
 
     var hasFilters: Bool {
-        platformID != nil
+        guard !isCanonicalBased else { return false }
+        return platformID != nil
             || genreID != nil
             || developerID != nil
             || (searchQuery?.isEmpty == false)
