@@ -1,95 +1,98 @@
-"""No-Intro DAT XML parser.
+"""No-Intro DAT parser (XML from DAT-o-MATIC or ClrMamePro from libretro mirror).
 
 Used as a *tertiary validator* for the Wikidata candidate list and as a
 hard reference for completeness gaps. No-Intro encodes region in a
-parenthetical suffix on each `<game name="...">` entry:
+parenthetical suffix on each game name:
 
     Super Mario Bros. (USA)
     Mother (Japan)
-    Akumajou Densetsu (Japan)        ← e.g. "Castlevania III" Famicom version
-    Bram Stoker's Dracula (Europe)
+    10-Yard Fight (USA, Europe)
 
 For strict-Western policy we keep only games whose region tag is one of
 USA / Europe / World / USA, Europe (multi-region carts).
 
-Datomatic requires a captcha login so we don't auto-download. The DAT must
-be obtained manually and placed at `data/no-intro/<filename>` per the
-platform config; the curator script will print clear instructions if it's
-missing.
+Official source: https://datomatic.no-intro.org/ (XML, captcha login).
+Dev/bootstrap mirror: libretro-database ClrMamePro DAT (same naming, cites
+no-intro) — see `scripts/fetch_nes_dat.sh`.
 """
 from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+from pathlib import Path
 from typing import Any
 
 from config import NOINTRO_DIR, PlatformConfig
 from matching import normalize
 
-# Strip everything inside parentheses or brackets from a No-Intro filename
-# (region, language, revision, prototype tags, etc.) to recover the canonical
-# title. Walk left-to-right so we keep `Mega Man 2` from `Mega Man 2 (USA)`
-# and from `Mega Man 2 (USA) (Rev 1)`.
 _TAG_GROUP = re.compile(r"\s*[\(\[][^\)\]]*[\)\]]\s*")
 _REGION_GROUP = re.compile(r"\(([^)]*)\)")
 
-_WESTERN_REGION_TAGS = frozenset({
-    "usa", "europe", "world", "usa, europe", "usa, australia",
-    "europe, usa", "europe, australia", "australia",
-})
+_WESTERN_REGION_TOKENS = ("usa", "europe", "world", "australia")
 
-# Pre-release / non-retail artifacts we always drop (these never shipped at
-# retail in any form and aren't in scope for a canonical set).
 _EXCLUDE_TAGS = frozenset({
     "proto", "prototype", "beta", "sample", "demo",
     "test program", "debug", "kiosk",
 })
 
-# Tags that indicate the cartridge shipped at retail BUT without official
-# platform-holder licensing (Tengen, Color Dreams, Camerica, Wisdom Tree,
-# Panesian, etc.). We keep these in the canonical set and surface the
-# license status as a structured field.
 _UNLICENSED_TAGS = frozenset({
     "unl", "unlicensed", "aftermarket", "homebrew",
 })
 
+_CLRMAME_NAME_RE = re.compile(r'^\s+name "([^"]+)"\s*$', re.MULTILINE)
+
 
 def load(platform: PlatformConfig) -> dict[str, dict[str, Any]]:
-    """Return a dict keyed on normalized title for the platform's DAT.
-
-    Each record carries `{title, regions, has_western_release, raw_names}`.
-    `regions` is the union of region tags across all entries (a multi-cart
-    might appear once as Europe-only and once as USA-only).
-    """
+    """Return a dict keyed on normalized title for the platform's DAT."""
     dat_path = NOINTRO_DIR / platform.nointro_dat_filename
     if not dat_path.exists():
         print(
             f"[no-intro] DAT not found at {dat_path.relative_to(NOINTRO_DIR.parent.parent)}.\n"
-            f"          Download from https://datomatic.no-intro.org/ "
+            f"          Run: ./scripts/fetch_nes_dat.sh\n"
+            f"          Or download XML from https://datomatic.no-intro.org/ "
             f"(System → 'Nintendo - Nintendo Entertainment System (Headered) "
-            f"(Parent-Clone)') and save to that path. Skipping No-Intro "
-            f"validation for this run."
+            f"(Parent-Clone)'). Skipping No-Intro validation."
         )
         return {}
 
-    print(f"[no-intro] Parsing {dat_path.name}")
-    tree = ET.parse(dat_path)
-    root = tree.getroot()
+    print(f"[no-intro] Parsing {dat_path.name} ({_detect_format(dat_path)})")
+    raw_names = _read_raw_names(dat_path)
+    return _build_western_index(raw_names)
 
+
+def _detect_format(dat_path: Path) -> str:
+    head = dat_path.read_text(encoding="utf-8", errors="replace")[:200].lstrip()
+    if head.startswith("<?xml") or head.startswith("<"):
+        return "XML"
+    if head.lower().startswith("clrmamepro"):
+        return "ClrMamePro"
+    return "unknown"
+
+
+def _read_raw_names(dat_path: Path) -> list[str]:
+    text = dat_path.read_text(encoding="utf-8", errors="replace")
+    fmt = _detect_format(dat_path)
+    if fmt == "XML":
+        root = ET.fromstring(text)
+        return [
+            name for game in root.iter("game")
+            if (name := (game.get("name") or "").strip())
+        ]
+    if fmt == "ClrMamePro":
+        return _CLRMAME_NAME_RE.findall(text)
+    raise ValueError(f"Unsupported DAT format in {dat_path}")
+
+
+def _build_western_index(raw_names: list[str]) -> dict[str, dict[str, Any]]:
     games: dict[str, dict[str, Any]] = {}
     skipped_excluded = 0
-    skipped_non_western = 0
 
-    for game in root.iter("game"):
-        raw_name = game.get("name") or ""
-        if not raw_name:
-            continue
-
+    for raw_name in raw_names:
         tags = [t.strip().lower() for t in _REGION_GROUP.findall(raw_name)]
         if any(t in _EXCLUDE_TAGS or any(x in t for x in _EXCLUDE_TAGS) for t in tags):
             skipped_excluded += 1
             continue
-        # Unlicensed retail releases stay in the pool; record the flag.
+
         is_unlicensed = any(
             t in _UNLICENSED_TAGS or any(x in t for x in _UNLICENSED_TAGS)
             for t in tags
@@ -104,10 +107,6 @@ def load(platform: PlatformConfig) -> dict[str, dict[str, Any]]:
             None,
         )
 
-        is_western = region_tag is not None and any(
-            w in region_tag for w in ("usa", "europe", "world", "australia")
-        )
-
         title_clean = _TAG_GROUP.sub("", raw_name).strip()
         if not title_clean:
             continue
@@ -120,9 +119,6 @@ def load(platform: PlatformConfig) -> dict[str, dict[str, Any]]:
                 "title": title_clean,
                 "regions": set(),
                 "raw_names": [],
-                # `True` only if every variant we've seen is unlicensed; once
-                # we see a licensed variant we flip back to False (e.g. an
-                # unlicensed re-release of a licensed game).
                 "is_unlicensed": True,
             }
         games[key]["regions"].add(region_tag or "unknown")
@@ -130,24 +126,22 @@ def load(platform: PlatformConfig) -> dict[str, dict[str, Any]]:
         if not is_unlicensed:
             games[key]["is_unlicensed"] = False
 
-        if region_tag is not None and not is_western:
-            skipped_non_western += 1  # tracked but not skipped here; tier downstream
-
     western_only: dict[str, dict[str, Any]] = {}
     for key, record in games.items():
         regions = record["regions"]
         record["regions"] = sorted(regions)
         record["has_western_release"] = any(
-            any(w in r for w in ("usa", "europe", "world", "australia"))
+            any(w in r for w in _WESTERN_REGION_TOKENS)
             for r in regions
         )
+        record["is_unlicensed"] = record.get("is_unlicensed", False)
         if record["has_western_release"]:
             western_only[key] = record
 
     if skipped_excluded:
         print(
             f"[no-intro] Skipped {skipped_excluded} entries tagged "
-            f"Proto/Beta/Sample/Demo/Unlicensed."
+            f"Proto/Beta/Sample/Demo/Kiosk."
         )
     print(
         f"[no-intro] Parsed {len(games)} unique titles ({len(western_only)} with a "

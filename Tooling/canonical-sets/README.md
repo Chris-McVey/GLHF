@@ -82,21 +82,20 @@ are near-instant. Delete `.cache/` to force a fresh pull.
 
 ## Required external data
 
-The Wikidata SPARQL endpoint and the Wikipedia article are auto-fetched. The
-No-Intro DAT must be obtained manually:
+The Wikidata SPARQL endpoint and the Wikipedia article are auto-fetched.
 
-1. Visit [DAT-o-MATIC](https://datomatic.no-intro.org/) and create an
-   account if needed (downloads are gated by captcha).
-2. Navigate to **Download → System → "Nintendo - Nintendo Entertainment
-   System (Headered) (Parent-Clone)"** (or the equivalent for the platform
-   you're curating).
-3. Save the resulting `.dat` file at `data/no-intro/<filename>` matching the
-   `nointro_dat_filename` for that platform's `PlatformConfig`. For NES the
-   expected filename is `data/no-intro/nes.dat`.
+**Quick path (NES):** `./scripts/fetch_nes_dat.sh` downloads the
+[libretro-database](https://github.com/libretro/libretro-database) ClrMamePro
+DAT (header cites `no-intro`). Same parenthetical naming as DAT-o-MATIC.
 
-If the DAT is missing the curator prints a warning and proceeds with the
-two-source pipeline (Wikidata + Wikipedia), demoting any games that would
-have hit `authoritative` tier with No-Intro down to `likely`.
+**Official path:** DAT-o-MATIC XML (captcha login) → save as
+`data/no-intro/nes.dat`. XML and ClrMamePro are both supported.
+
+`data/no-intro/*.dat` is gitignored (~1.4MB). Without it, curation uses
+Wikidata + Wikipedia only (no `authoritative` 3/3 tier).
+
+After adding No-Intro, save `output/nes-before-nointro.json` then run
+`uv run scripts/nointro_impact_report.py` for a before/after summary.
 
 ## Outputs
 
