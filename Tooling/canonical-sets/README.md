@@ -4,9 +4,14 @@ One-off tooling that produces the bundled "Complete Platform Library" JSONs
 GLHF ships at runtime. Not part of the iOS app; runs on a developer machine
 when a platform's catalog needs (re)building.
 
-The output JSONs are intended to be vendored into the app target later
-(e.g. `GLHF/Resources/CanonicalSets/nes.json`). They are not committed
-from this directory by default — see `.gitignore`.
+The output JSONs are vendored into the app at
+`GLHF/Resources/CanonicalSets/<slug>.json` after curation. Generated
+artifacts under `output/` stay gitignored here; copy with:
+
+```bash
+./export_to_app.sh
+# or: cp output/nes.json ../../GLHF/Resources/CanonicalSets/nes.json
+```
 
 ## What it does (v2 multi-source)
 
